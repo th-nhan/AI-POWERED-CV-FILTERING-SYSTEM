@@ -526,6 +526,7 @@ Bộ phận Tuyển dụng
         raise HTTPException(status_code=500, detail=msg)
 
 if __name__ == "__main__":
-    import uvicorn
+    import uvicorn, os
+    host = os.getenv("HOST", "[IP_ADDRESS]")
     print("🚀 Khởi động Server FastAPI tại http://127.0.0.1:8000")
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("main:app", host=host, port=8000, reload=True)

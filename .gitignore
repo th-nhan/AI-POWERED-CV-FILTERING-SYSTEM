@@ -1,0 +1,30 @@
+# Biến môi trường & API Key (CỰC KỲ QUAN TRỌNG)
+.env
+.env.*
+!.env.example
+
+# Thư viện & Môi trường ảo Python
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Thư viện Frontend (React / Node)
+node_modules/
+dist/
+build/
+.npm/
+
+# Logs & Database tạm
+*.log
+*.sqlite3
+*.db
+
+# Cấu hình IDE / Hệ điều hành
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+token.json
+credentials.json
