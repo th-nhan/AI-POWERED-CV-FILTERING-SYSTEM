@@ -253,8 +253,10 @@ export default function App() {
       formData.append('jd_text', jdText);
       formData.append('file', fObj.file);
 
+      const BASE_URL = import.meta.env.BASE_URL;
+
       try {
-        const response = await fetch('http://127.0.0.1:8000/api/scan-local-cv', {
+        const response = await fetch(`${BASE_URL}/api/scan-local-cv`, {
           method: 'POST',
           body: formData,
         });
@@ -285,7 +287,9 @@ export default function App() {
       formData.append('query', gmailQuery);
       formData.append('time_range', gmailTimeRange);
 
-      const response = await fetch('http://127.0.0.1:8000/api/scan-gmail', {
+      const BASE_URL = import.meta.env.BASE_URL;
+
+      const response = await fetch(`${BASE_URL}/api/scan-gmail`, {
         method: 'POST',
         body: formData,
       });
@@ -324,9 +328,10 @@ export default function App() {
       alert("Không tìm thấy địa chỉ email của ứng viên trong hồ sơ này!");
       return;
     }
-    
+    const BASE_URL = import.meta.env.BASE_URL;
+
     try {
-      const response = await fetch('http://127.0.0.1:8000/api/send-interview-email', {
+      const response = await fetch(`${BASE_URL}/api/send-interview-email`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: email, name: res.candidate_name || 'Ứng viên' })
