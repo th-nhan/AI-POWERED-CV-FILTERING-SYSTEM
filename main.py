@@ -57,9 +57,13 @@ def read_pdf(file_bytes):
                 text += page_text
             else:
                 # Quét OCR nếu là file ảnh
-                pix = page.get_pixmap(dpi=150)
-                img = Image.open(io.BytesIO(pix.tobytes()))
-                text += pytesseract.image_to_string(img, lang='eng+vie')
+                try:
+                    pix = page.get_pixmap(dpi=150)
+                    img = Image.open(io.BytesIO(pix.tobytes()))
+                    text += pytesseract.image_to_string(img, lang='eng+vie')
+                except Exception as e:
+                    print(f"Cảnh báo OCR: {e}")
+                    text += "\n[Hệ thống không thể đọc được nội dung ảnh vì thiếu thư viện OCR trên máy chủ]\n"
         return text, None
     except Exception as e:
         print(f"Lỗi đọc PDF: {e}")
@@ -88,29 +92,25 @@ def check_internet(host="google.com", port=443, timeout=3):
 
 def call_ollama(prompt):
     """Hàm tiện ích gọi Ollama API (Offline Fallback)"""
-    try:
-        response = ollama.chat(
-            model=OLLAMA_MODEL,
-            messages=[{'role': 'user', 'content': prompt}],
-            options=OLLAMA_OPTIONS,
-            keep_alive=KEEP_ALIVE,
-            format='json'
-        )
-        raw_text = response['message']['content'].strip()
-        return extract_json_from_text(raw_text)
-    except Exception as e:
-        print(f"Lỗi khi gọi Ollama: {e}")
-        return None
+    response = ollama.chat(
+        model=OLLAMA_MODEL,
+        messages=[{'role': 'user', 'content': prompt}],
+        options=OLLAMA_OPTIONS,
+        keep_alive=KEEP_ALIVE,
+        format='json'
+    )
+    raw_text = response['message']['content'].strip()
+    return extract_json_from_text(raw_text)
 
 def call_ai_hybrid(prompt):
     """Kiến trúc Hybrid: Ưu tiên Gemini, Fallback sang Ollama"""
     import time
-    # Nghỉ 3 giây TRƯỚC KHI gọi để đảm bảo không bắn request liên tục quá nhanh
     time.sleep(1)
+    
+    error_logs = []
     
     if check_internet():
         try:
-            # SỬ DỤNG gemini-2.0-flash (Model 1.5 đã bị Google xóa bỏ trong năm 2026)
             model = genai.GenerativeModel('gemini-2.5-flash-lite')
             response = model.generate_content(
                 prompt,
@@ -122,11 +122,20 @@ def call_ai_hybrid(prompt):
             raw_text = response.text.strip()
             return extract_json_from_text(raw_text)
         except Exception as e:
-            print("Đang dùng modal tự build Ollama...")
-            return call_ollama(prompt)
+            error_logs.append(f"Gemini API Lỗi: {str(e)}")
+            print(f"Đang dùng modal tự build Ollama do Gemini lỗi: {e}")
     else:
-        print("Mất mạng! Chuyển sang chế độ Offline với Ollama...")
+        error_logs.append("Mất kết nối Internet (hoặc bị block port 443).")
+
+    # Fallback sang Ollama
+    try:
         return call_ollama(prompt)
+    except Exception as e:
+        error_logs.append(f"Ollama Lỗi: {str(e)}")
+        print(f"Lỗi khi gọi Ollama: {e}")
+        
+    # Cả hai model đều chết (Render không có Ollama, Gemini lỗi key)
+    raise RuntimeError(f"Hệ thống AI hiện không khả dụng. Chi tiết: {' | '.join(error_logs)}")
 
 # ==========================================
 # CẤU TRÚC STATE-BASED (LƯU TRỮ JD BLUEPRINT)
@@ -166,9 +175,13 @@ CHỈ TRẢ VỀ JSON DUY NHẤT THEO SCHEMA SAU:
 }}
 """
     print("[1/3] Đang phân tích JD...")
-    result = call_ai_hybrid(prompt)
+    try:
+        result = call_ai_hybrid(prompt)
+    except Exception as e:
+        return {"error": f"Lỗi AI JD: {str(e)}"}
+        
     if result is None:
-        return {"error": "Không thể parse JD"}
+        return {"error": "Không thể parse JD (Kết quả rỗng)"}
     
     # Ép kiểu an toàn
     if "required_years_of_experience" in result and isinstance(result["required_years_of_experience"], str):
@@ -206,9 +219,13 @@ CHỈ TRẢ VỀ JSON DUY NHẤT THEO SCHEMA SAU:
 }}
 """
     print("[2/3] Đang phân tích CV...")
-    result = call_ai_hybrid(prompt)
+    try:
+        result = call_ai_hybrid(prompt)
+    except Exception as e:
+        return {"error": f"Lỗi AI CV: {str(e)}"}
+        
     if result is None:
-        return {"error": "Không thể parse CV"}
+        return {"error": "Không thể parse CV (Kết quả rỗng)"}
     
     # Ép kiểu an toàn
     if "total_years_experience" in result and isinstance(result["total_years_experience"], str):
@@ -264,9 +281,13 @@ BẠN BẮT BUỘC PHẢI TRẢ VỀ ĐÚNG CẤU TRÚC JSON SAU (KHÔNG THÊM B
 }}
 """
     print("[3/3] Đang tiến hành Matching và Chấm điểm...")
-    result = call_ai_hybrid(prompt)
+    try:
+        result = call_ai_hybrid(prompt)
+    except Exception as e:
+        return {"error": f"Lỗi AI Matching: {str(e)}"}
+        
     if result is None:
-        return {"error": "Không thể match CV và JD"}
+        return {"error": "Không thể match CV và JD (Kết quả rỗng)"}
         
     # =========================================================
     # PYTHON HARD VERIFICATION (TÍNH ĐIỂM BẰNG CODE ĐỂ CHỐNG ẢO GIÁC)
