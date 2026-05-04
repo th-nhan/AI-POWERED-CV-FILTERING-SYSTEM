@@ -173,7 +173,7 @@ ollama run qwen2.5:3b
 
 ```bash id="z9x1rf"
 git clone https://github.com/your-username/cv-filtering-local-ai.git
-cd cv-filtering-local-ai
+cd filter_cv_ai
 ```
 
 ---
@@ -181,7 +181,6 @@ cd cv-filtering-local-ai
 ### 3️⃣ Backend Setup (FastAPI + SQLite)
 
 ```bash id="p3k8dw"
-cd backend
 
 # Tạo virtual environment
 python -m venv venv
