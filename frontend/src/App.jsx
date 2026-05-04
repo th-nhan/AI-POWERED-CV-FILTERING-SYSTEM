@@ -1,9 +1,9 @@
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useEffect, useCallback } from 'react';
 import {
   UploadCloud, Mail, FileText, CheckCircle2, XCircle,
   Trash2, File as FileIcon, Loader2, ChevronRight, X,
   ArrowUpDown, BrainCircuit, ExternalLink, Menu,
-  Briefcase, Search, AlertCircle
+  Briefcase, Search, AlertCircle, Save, History, ChevronDown, ChevronUp, RefreshCw
 } from 'lucide-react';
 import axios from 'axios';
 
@@ -203,7 +203,83 @@ const ResultDrawer = ({ isOpen, onClose, data }) => {
 ========================================= */
 export default function App() {
   const [jdText, setJdText] = useState('');
+  const [jdTitle, setJdTitle] = useState('');
   const [activeTab, setActiveTab] = useState('local');
+
+  // JD History
+  const [jdHistory, setJdHistory] = useState([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const [savingJd, setSavingJd] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+
+  const BASE_URL = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+    ? 'http://127.0.0.1:8000'
+    : (import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000');
+
+  const loadJdHistory = useCallback(async () => {
+    setLoadingHistory(true);
+    try {
+      const res = await fetch(`${BASE_URL}/api/jd`);
+      const data = await res.json();
+      if (res.ok) setJdHistory(data.data || []);
+    } catch (e) {
+      console.error('loadJdHistory failed', e);
+    } finally {
+      setLoadingHistory(false);
+    }
+  }, [BASE_URL]);
+
+  useEffect(() => { loadJdHistory(); }, [loadJdHistory]);
+
+  const handleSaveJd = async () => {
+    if (!jdText.trim()) { alert('Vui lòng nhập JD trước khi lưu!'); return; }
+    setSavingJd(true);
+    try {
+      const res = await fetch(`${BASE_URL}/api/jd`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: jdTitle.trim() || 'JD không tên', jd_text: jdText }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert('Đã lưu JD thành công!');
+        await loadJdHistory();
+        setShowHistory(true);
+      } else {
+        alert('Lỗi lưu JD: ' + (data.detail || 'Không rõ'));
+      }
+    } catch (e) {
+      alert('Mất kết nối server!');
+    } finally {
+      setSavingJd(false);
+    }
+  };
+
+  const handleDeleteJd = async (id, e) => {
+    e.stopPropagation();
+    if (!confirm('Xóa JD này khỏi lịch sử?')) return;
+    try {
+      await fetch(`${BASE_URL}/api/jd/${id}`, { method: 'DELETE' });
+      setJdHistory(prev => prev.filter(j => j.id !== id));
+    } catch (e) { console.error(e); }
+  };
+
+  const handleLoadJd = async (jd) => {
+    try {
+      // Fetch full jd_text (list API only returns preview)
+      const res = await fetch(`${BASE_URL}/api/jd/${jd.id}`);
+      const data = await res.json();
+      if (res.ok && data.data) {
+        setJdText(data.data.jd_text || '');
+        setJdTitle(data.data.title || '');
+        setShowHistory(false);
+      } else {
+        alert('Không tải được JD: ' + (data.detail || 'Lỗi server'));
+      }
+    } catch (e) {
+      alert('Mất kết nối server khi tải JD!');
+    }
+  };
 
   // File State
   const fileInputRef = useRef(null);
@@ -267,9 +343,11 @@ export default function App() {
           setFiles(prev => prev.map(f => f.id === fObj.id ? { ...f, status: 'done', result: resultData } : f));
           setResults(prev => [...prev, resultData]);
         } else {
+          console.error('scan-local-cv failed', response.status, data);
           setFiles(prev => prev.map(f => f.id === fObj.id ? { ...f, status: 'error', errorMsg: data.detail || 'Lỗi Server' } : f));
         }
       } catch (err) {
+        console.error('scan-local-cv request failed', err);
         setFiles(prev => prev.map(f => f.id === fObj.id ? { ...f, status: 'error', errorMsg: 'Mất kết nối API' } : f));
       }
     }
@@ -377,26 +455,96 @@ export default function App() {
 
         {/* SIDEBAR (Responsive: Top trên Mobile, Trái trên Desktop) */}
         <aside className="w-full md:w-[320px] lg:w-[380px] bg-white border-b md:border-b-0 md:border-r border-slate-200 flex flex-col shadow-sm z-30 flex-shrink-0 transition-all">
-          <div className="p-5 flex-1 flex flex-col">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-4 flex items-center gap-2">
+          <div className="p-5 flex-1 flex flex-col gap-3">
+            <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500 flex items-center gap-2">
               <Briefcase className="w-4 h-4" /> Yêu cầu tuyển dụng
             </h2>
+
+            {/* JD Title Input */}
+            <input
+              type="text"
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all text-slate-700 placeholder-slate-400"
+              placeholder="Tên vị trí tuyển dụng (VD: Backend Python)…"
+              value={jdTitle}
+              onChange={(e) => setJdTitle(e.target.value)}
+            />
+
+            {/* JD Textarea */}
             <textarea
               className="flex-1 w-full bg-slate-50 border border-slate-200 rounded-xl p-4 text-sm resize-none outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all text-slate-700 leading-relaxed shadow-inner min-h-[150px] md:min-h-0"
               placeholder="Dán Job Description (JD) vào đây... Hệ thống AI sẽ phân tích dựa trên khung năng lực này."
               value={jdText}
               onChange={(e) => setJdText(e.target.value)}
-            ></textarea>
+            />
 
-            <div className="mt-6 space-y-3">
+            {/* Action Buttons */}
+            <div className="space-y-2">
+              {/* Scan button */}
               <button
                 onClick={activeTab === 'local' ? scanLocalFiles : handleFetchFromGmail}
-                className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-sm shadow-indigo-200 transition-all active:scale-[0.98] flex items-center justify-center gap-2"
+                className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-sm shadow-indigo-200 transition-all active:scale-[0.98] flex items-center justify-center gap-2"
               >
                 <BrainCircuit className="w-5 h-5" />
                 {activeTab === 'local' ? 'Bắt đầu quét CV' : 'Quét Hộp thư Gmail'}
               </button>
+
+              {/* Save JD button */}
+              <button
+                onClick={handleSaveJd}
+                disabled={savingJd || !(jdText?.trim())}
+                className="w-full py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-xl font-semibold transition-all active:scale-[0.98] flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed text-sm"
+              >
+                {savingJd ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                {savingJd ? 'Đang lưu…' : 'Lưu JD'}
+              </button>
+
+              {/* Toggle history */}
+              <button
+                onClick={() => { setShowHistory(v => !v); if (!showHistory) loadJdHistory(); }}
+                className="w-full py-2 text-slate-500 hover:text-indigo-600 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
+              >
+                <History className="w-3.5 h-3.5" />
+                Lịch sử JD ({jdHistory.length})
+                {showHistory ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+              </button>
             </div>
+
+            {/* JD History Panel */}
+            {showHistory && (
+              <div className="border border-slate-200 rounded-xl overflow-hidden">
+                <div className="flex items-center justify-between px-3 py-2 bg-slate-50 border-b border-slate-200">
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wide">Lịch sử JD đã lưu</span>
+                  <button onClick={loadJdHistory} className="p-1 hover:text-indigo-600 text-slate-400 transition-colors" title="Làm mới">
+                    <RefreshCw className={`w-3.5 h-3.5 ${loadingHistory ? 'animate-spin' : ''}`} />
+                  </button>
+                </div>
+                <div className="max-h-56 overflow-y-auto divide-y divide-slate-100">
+                  {jdHistory.length === 0 ? (
+                    <p className="text-xs text-slate-400 text-center py-4">Chưa có JD nào được lưu</p>
+                  ) : jdHistory.map(jd => (
+                    <div
+                      key={jd.id}
+                      className="flex items-start gap-2 px-3 py-2.5 hover:bg-indigo-50 cursor-pointer group transition-colors"
+                      onClick={() => handleLoadJd(jd)}
+                    >
+                      <FileText className="w-3.5 h-3.5 mt-0.5 text-indigo-400 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-semibold text-slate-700 truncate group-hover:text-indigo-700">{jd.title || '(Không tên)'}</p>
+                        <p className="text-[10px] text-slate-400 mt-0.5 truncate">{jd.preview}…</p>
+                        <p className="text-[10px] text-slate-400">{new Date(jd.created_at).toLocaleDateString('vi-VN')}</p>
+                      </div>
+                      <button
+                        onClick={(e) => handleDeleteJd(jd.id, e)}
+                        className="p-1 text-slate-300 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-all flex-shrink-0"
+                        title="Xóa"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </aside>
 

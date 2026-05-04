@@ -2,10 +2,11 @@ fastapi
 uvicorn
 python-multipart
 PyMuPDF
-ollama
 google-api-python-client
 google-auth-httplib2
 google-auth-oauthlib
 pydantic
-google-generativeai
+ollama
+numpy
 python-dotenv
+sqlalchemy

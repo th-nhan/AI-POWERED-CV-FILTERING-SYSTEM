@@ -68,7 +68,6 @@ def process_ai_only(filename, sender, file_data, jd_text, read_pdf_func, extract
         if not cv_text:
             return {"filename": filename, "candidate_name": sender, "status": "error", "errorMsg": f"Lỗi đọc PDF: {pdf_err}"}
             
-        cv_text = cv_text[:3000]
         ai_result, ai_err = extract_ai_func(cv_text, jd_text, filename)
         
         if ai_result:
