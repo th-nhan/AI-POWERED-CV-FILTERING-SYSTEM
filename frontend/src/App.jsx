@@ -292,7 +292,7 @@ export default function App() {
 
   // General Results
   const [results, setResults] = useState([]);
-  const [sortOrder, setSortOrder] = useState('desc');
+  const [sortOrder, setSortOrder] = useState('none');
   const [selectedResult, setSelectedResult] = useState(null);
 
   // -- FILE HANDLING (LOCAL) --
@@ -393,6 +393,9 @@ export default function App() {
 
   // -- TABLE SORTING --
   const sortedResults = useMemo(() => {
+    if (sortOrder === 'none') {
+      return results;
+    }
     return [...results].sort((a, b) => {
       const scoreA = a.tong_quan?.diem_tong ?? a.score ?? 0;
       const scoreB = b.tong_quan?.diem_tong ?? b.score ?? 0;
@@ -693,12 +696,25 @@ export default function App() {
                     <BrainCircuit className="w-5 h-5 text-indigo-600" />
                     Kết quả Ứng viên ({results.length})
                   </h3>
-                  <button
-                    onClick={() => setSortOrder(prev => prev === 'desc' ? 'asc' : 'desc')}
-                    className="text-sm font-bold text-slate-500 hover:text-slate-800 flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-white shadow-sm"
-                  >
-                    Sắp xếp Điểm <ArrowUpDown className="w-4 h-4" />
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => {
+                        if (confirm('Bạn có chắc muốn xóa toàn bộ kết quả đã lọc?')) {
+                          setResults([]);
+                          setFiles([]);
+                        }
+                      }}
+                      className="text-sm font-bold text-rose-500 hover:text-rose-700 flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-rose-200 bg-rose-50 shadow-sm transition-colors"
+                    >
+                      <Trash2 className="w-4 h-4" /> Xóa kết quả
+                    </button>
+                    <button
+                      onClick={() => setSortOrder(prev => prev === 'none' ? 'desc' : prev === 'desc' ? 'asc' : 'none')}
+                      className={`text-sm font-bold flex items-center gap-1.5 px-3 py-1.5 rounded-lg border shadow-sm transition-colors ${sortOrder !== 'none' ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100' : 'text-slate-500 hover:text-slate-800 border-slate-200 bg-white'}`}
+                    >
+                      {sortOrder === 'none' ? 'Sắp xếp Điểm' : sortOrder === 'desc' ? 'Điểm: Cao -> Thấp' : 'Điểm: Thấp -> Cao'} <ArrowUpDown className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
 
                 <div className="overflow-x-auto">

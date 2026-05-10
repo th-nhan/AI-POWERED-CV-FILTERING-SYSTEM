@@ -65,6 +65,13 @@ TECH_SKILL_ALIASES = [
     ("GCP", ["gcp", "google cloud"]),
     ("JavaScript", ["javascript", "js"]),
     ("TypeScript", ["typescript", "ts"]),
+    ("React Native", ["react native"]),
+    ("Flutter", ["flutter"]),
+    ("HTML", ["html", "html5"]),
+    ("CSS", ["css", "css3"]),
+    ("Frontend", ["frontend", "front-end", "front end"]),
+    ("Backend", ["backend", "back-end", "back end"]),
+    ("Fullstack", ["fullstack", "full-stack", "full stack"]),
     ("React", ["react", "reactjs", "react.js"]),
     ("Next.js", ["nextjs", "next.js"]),
     ("Vue", ["vue", "vuejs", "vue.js"]),
@@ -195,11 +202,31 @@ def extract_skills(text: str) -> list[str]:
     search_text = normalize_search_text(text)
     found = []
 
+    flat_aliases = []
     for skill, aliases in TECH_SKILL_ALIASES:
-        if any(contains_alias(search_text, alias) for alias in aliases):
-            found.append(skill)
+        for alias in aliases:
+            flat_aliases.append((skill, alias.lower()))
+    
+    flat_aliases.sort(key=lambda x: len(x[1]), reverse=True)
 
-    return found
+    for skill, alias in flat_aliases:
+        alias_esc = re.escape(alias)
+        if re.fullmatch(r"[a-z0-9 ]+", alias):
+            pattern = rf"(?<![a-z0-9]){alias_esc}(?![a-z0-9])"
+        else:
+            pattern = alias_esc
+            
+        if re.search(pattern, search_text):
+            if skill not in found:
+                found.append(skill)
+            search_text = re.sub(pattern, " ", search_text)
+
+    ordered_found = []
+    for skill, _ in TECH_SKILL_ALIASES:
+        if skill in found:
+            ordered_found.append(skill)
+            
+    return ordered_found
 
 
 def infer_domain(skills: Sequence[str], text: str) -> str:
@@ -226,12 +253,43 @@ def take_items(items: Sequence[str], limit: int = 6) -> list[str]:
     return list(items[:limit])
 
 
+def extract_role_from_text(text: str) -> Optional[str]:
+    role_keywords = [
+        "developer", "engineer", "designer", "manager", "analyst", "scientist",
+        "administrator", "consultant", "specialist", "kỹ sư", "lập trình",
+        "chuyên viên", "quản lý", "thực tập sinh", "intern", "fresher",
+        "junior", "senior", "lead", "architect", "tester", "qa", "qc",
+        "data", "frontend", "backend", "fullstack", "devops", "marketing",
+        "sales", "nhân sự", "hr", "accountant", "kế toán", "business analyst",
+        "giám đốc", "trưởng phòng", "phó phòng", "trưởng nhóm"
+    ]
+    
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    for line in lines[:15]:
+        clean_line = re.sub(r"\s+", " ", line).strip(" -_|[]()")
+        lower_line = clean_line.lower()
+        
+        if len(clean_line) > 50 or len(clean_line) < 3:
+            continue
+            
+        if EMAIL_REGEX.search(clean_line) or sum(c.isdigit() for c in clean_line) >= 4:
+            continue
+            
+        if any(kw in lower_line for kw in role_keywords):
+            if len(clean_line.split()) <= 8:
+                if any(bad in lower_line for bad in ["experience", "kinh nghiệm", "kỹ năng", "skill", "education", "học vấn", "certificate", "chứng chỉ", "objective", "mục tiêu"]):
+                    continue
+                return clean_line.title()
+                
+    return None
+
+
 def build_embedding_input(text: str) -> str:
     clean_text = normalize_text(text)
     skills = extract_skills(clean_text)
 
     if skills:
-        domain = infer_domain(skills, clean_text)
+        domain = extract_role_from_text(text) or infer_domain(skills, clean_text)
         return normalize_text(f"Lĩnh vực: {domain}. Kỹ năng: {', '.join(skills)}.")
 
     return clean_text[:MAX_EMBEDDING_CHARS]
@@ -247,8 +305,8 @@ def build_vietnamese_analysis(
     matched_skills = [skill for skill in jd_skills if skill in cv_skills]
     missing_skills = [skill for skill in jd_skills if skill not in cv_skills]
     extra_skills = [skill for skill in cv_skills if skill not in matched_skills]
-    jd_domain = infer_domain(jd_skills, jd_text)
-    cv_domain = infer_domain(cv_skills, cv_text)
+    jd_domain = extract_role_from_text(jd_text) or infer_domain(jd_skills, jd_text)
+    cv_domain = extract_role_from_text(cv_text) or infer_domain(cv_skills, cv_text)
 
     strengths = []
     weaknesses = []
@@ -519,26 +577,50 @@ def get_decision(score: float) -> tuple[str, str, bool]:
 
 
 def build_score_breakdown(
-    score: float,
+    semantic_score: float,
     jd_skills: Optional[Sequence[str]] = None,
     matched_skills: Optional[Sequence[str]] = None,
     exp_score: float = 0.0,
+    skill_kill_switch: bool = False,
+    has_core_skill: bool = True,
 ) -> dict:
-    ratio = score / 100.0
+    if skill_kill_switch:
+        return {
+            "semantic_similarity": 0,
+            "ky_nang_bat_buoc": 0,
+            "so_nam_va_cap_do": 0,
+            "chat_luong_kinh_nghiem": 0,
+            "ky_nang_cong_diem": 0,
+            "tong_diem": 0,
+        }
+
     jd_skills = jd_skills or []
     matched_skills = matched_skills or []
 
     if jd_skills:
-        skill_score = round(45 * (len(matched_skills) / len(jd_skills)), 2)
+        skill_ratio = len(matched_skills) / len(jd_skills)
     else:
-        skill_score = round(45 * ratio, 2)
+        skill_ratio = semantic_score / 100.0
+
+    ky_nang_bat_buoc = int(round(45 * skill_ratio))
+    so_nam_va_cap_do = int(round(30 * (exp_score / 100.0) * skill_ratio))
+    
+    if has_core_skill:
+        chat_luong_kinh_nghiem = int(round(15 * (semantic_score / 100.0) * skill_ratio))
+    else:
+        chat_luong_kinh_nghiem = 0
+        
+    ky_nang_cong_diem = int(round(10 * (semantic_score / 100.0) * skill_ratio))
+
+    tong_diem = ky_nang_bat_buoc + so_nam_va_cap_do + chat_luong_kinh_nghiem + ky_nang_cong_diem
 
     return {
-        "semantic_similarity": score,
-        "ky_nang_bat_buoc": skill_score,
-        "so_nam_va_cap_do": round(30 * (exp_score / 100.0), 2),
-        "chat_luong_kinh_nghiem": round(15 * ratio, 2),
-        "ky_nang_cong_diem": round(10 * ratio, 2),
+        "semantic_similarity": int(round(semantic_score)),
+        "ky_nang_bat_buoc": ky_nang_bat_buoc,
+        "so_nam_va_cap_do": so_nam_va_cap_do,
+        "chat_luong_kinh_nghiem": chat_luong_kinh_nghiem,
+        "ky_nang_cong_diem": ky_nang_cong_diem,
+        "tong_diem": tong_diem,
     }
 
 
@@ -591,15 +673,28 @@ def match_cv_to_jd(
     else:
         exp_score = 100.0
 
+    actual_jd_text = jd_text or global_ats_state.jd_text
+    
+    jd_domain_inferred = infer_domain(analysis.get("jd_skills", []), actual_jd_text)
+    cv_domain_inferred = infer_domain(analysis.get("cv_skills", []), cv_text)
+
+    core_jd_skills = extract_skills("\n".join(actual_jd_text.splitlines()[:3]))
+    if core_jd_skills:
+        has_core_skill = any(skill in analysis["cv_skills"] for skill in core_jd_skills) or (jd_domain_inferred == cv_domain_inferred and jd_domain_inferred != "Chưa xác định rõ")
+    else:
+        has_core_skill = bool(analysis["matched_skills"]) if analysis["jd_skills"] else True
+
     skill_kill_switch = bool(analysis["jd_skills"]) and not analysis["matched_skills"]
 
-    if skill_kill_switch:
-        match_score = 0.0
-    elif analysis["jd_skills"]:
-        keyword_score = (len(analysis["matched_skills"]) / len(analysis["jd_skills"])) * 100
-        match_score = round((semantic_score * 0.5) + (keyword_score * 0.3) + (exp_score * 0.2), 2)
-    else:
-        match_score = round((semantic_score * 0.8) + (exp_score * 0.2), 2)
+    score_breakdown = build_score_breakdown(
+        semantic_score=semantic_score,
+        jd_skills=analysis["jd_skills"],
+        matched_skills=analysis["matched_skills"],
+        exp_score=exp_score,
+        skill_kill_switch=skill_kill_switch,
+        has_core_skill=has_core_skill,
+    )
+    match_score = score_breakdown["tong_diem"]
 
     analysis = build_vietnamese_analysis(
         jd_text or global_ats_state.jd_text,
@@ -649,12 +744,7 @@ def match_cv_to_jd(
             "so_nam_kinh_nghiem": candidate_years_experience,
             "phuong_phap": "Ollama Semantic Search",
         },
-        "chi_tiet_diem": build_score_breakdown(
-            match_score,
-            analysis["jd_skills"],
-            analysis["matched_skills"],
-            exp_score,
-        ),
+        "chi_tiet_diem": score_breakdown,
         "phan_tich_linh_vuc": {
             "linh_vuc_jd": analysis["jd_domain"],
             "linh_vuc_cv": analysis["cv_domain"],
