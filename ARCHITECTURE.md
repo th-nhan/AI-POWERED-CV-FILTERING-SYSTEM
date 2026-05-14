@@ -844,3 +844,327 @@ Sử dụng sự kiện `@app.on_event("startup")` của FastAPI để thực th
 
 #### D. Hiệu năng truy vấn Duplicate
 Việc sử dụng **MD5 Hashing** (`jd_hash`) cho phép hệ thống thực hiện so khớp văn bản JD ở độ phức tạp **O(1)**. Thay vì so sánh chuỗi (String Comparison) tốn kém tài nguyên, database chỉ cần so sánh 32 ký tự định danh duy nhất.
+
+
+---
+
+## 13. Mô hình Cơ sở dữ liệu (Database Models)
+
+---
+
+### 13.1 Mô hình mức quan niệm (Conceptual Data Model)
+
+> Mức quan niệm mô tả **dữ liệu cần lưu trữ là gì** và **mối quan hệ nghiệp vụ** giữa chúng — không quan tâm đến công nghệ hay cấu trúc vật lý.
+
+#### Sơ đồ thực thể - quan hệ (ERD mức quan niệm)
+
+```
+ ┌──────────────────────────────────────────────────────────────────────────────┐
+ │                     THỰC THỂ NGHIỆP VỤ HIỆN TẠI                              │
+ └──────────────────────────────────────────────────────────────────────────────┘
+
+  ┌──────────────────────┐         ┌──────────────────────────────────────────┐
+  │   HR / Nha tuyen     │         │   Mo ta Cong viec (JD)                   │
+  │   dung               │         │                                          │
+  │   (Actor)            │  1   *  │   - Ten vi tri                           │
+  │                      ├─────────│   - Noi dung mo ta day du                │
+  │  Quan ly JD          │         │   - Ma dinh danh duy nhat (Hash MD5)     │
+  │  Xem lich su         │         │   - Thoi diem tao / cap nhat             │
+  └──────────────────────┘         └─────────────────┬────────────────────────┘
+                                                     │
+                                                     │  1 JD duoc dung de quet
+                                                     │  nhieu lan (1 : N)
+                                                     │
+                                                     ▼
+                                   ┌──────────────────────────────────────────┐
+                                   │   Phien quet CV (Scan Session)           │
+                                   │   [du kien — chua trien khai]            │
+                                   │                                          │
+                                   │   - Thoi diem thuc hien                  │
+                                   │   - Nguon CV (Local / Gmail)             │
+                                   │   - So CV da quet                        │
+                                   └─────────────────┬────────────────────────┘
+                                                     │
+                                                     │  1 Phien quet ra nhieu
+                                                     │  ket qua ung vien (1 : N)
+                                                     │
+                                                     ▼
+                                   ┌──────────────────────────────────────────┐
+                                   │   Ket qua Ung vien (Candidate)           │
+                                   │   [du kien — chua trien khai]            │
+                                   │                                          │
+                                   │   - Ten ung vien                         │
+                                   │   - Email                                │
+                                   │   - Diem phu hop (0-100)                 │
+                                   │   - Quyet dinh (DAT / CHO / KHONG DAT)   │
+                                   │   - Nganh nghe                           │
+                                   │   - Ky nang khop / con thieu             │
+                                   └─────────────────┬────────────────────────┘
+                                                     │
+                                                     │  1 Ung vien co the nhan
+                                                     │  nhieu email (1 : N)
+                                                     │
+                                                     ▼
+                                   ┌──────────────────────────────────────────┐
+                                   │   Lich su Email (Email Log)              │
+                                   │   [du kien — chua trien khai]            │
+                                   │                                          │
+                                   │   - Dia chi nhan                         │
+                                   │   - Thoi diem gui                        │
+                                   │   - Trang thai (sent / failed)           │
+                                   └──────────────────────────────────────────┘
+```
+
+#### Mô tả các thực thể
+
+| Thực thể | Trạng thái | Thuộc tính chính | Mối quan hệ |
+|---|---|---|---|
+| **JD (Mô tả công việc)** | Đã triển khai | id, title, jd_text, jd_hash | 1 HR quản lý N JD |
+| **Scan Session (Phiên quét)** | Dự kiến | session_id, jd_id, created_at, total_cvs | 1 JD cho N phiên quét |
+| **Candidate (Ứng viên)** | Dự kiến | name, email, score, decision | 1 phiên quét → N ứng viên |
+| **Email Log (Lịch sử email)** | Dự kiến | to_email, sent_at, status | 1 ứng viên nhận N email |
+
+---
+
+### 13.2 Mô hình mức vật lý (Physical Data Model)
+
+> Mức vật lý mô tả **hệ thống lưu trữ thực tế như thế nào** — bao gồm kiểu dữ liệu cụ thể, ràng buộc, chỉ mục, file vật lý và engine.
+
+#### Thông tin engine
+
+| Thuộc tính | Giá trị |
+|---|---|
+| Engine | SQLite 3 |
+| File vật lý | `ats_data.db` (cùng thư mục project root) |
+| Encoding | UTF-8 |
+| Journal Mode | WAL (Write-Ahead Logging) |
+| Thread mode | `check_same_thread=False` |
+| Khởi tạo | Tự động qua `init_db()` khi server start |
+
+---
+
+#### Sơ đồ vật lý — Bảng đang triển khai
+
+```
+ FILE: ats_data.db  (SQLite binary format)
+ ┌───────────────────────────────────────────────────────────────────────────┐
+ │  TABLE: job_descriptions                                                  │
+ │  ─────────────────────────────────────────────────────────────────────    │
+ │  Cot               Kieu vat ly      Rang buoc              Chi muc        │
+ │  ─────────────────────────────────────────────────────────────────────    │
+ │  id                INTEGER          PK  AUTOINCREMENT       B-Tree PK     │
+ │  title             TEXT             NOT NULL  DEFAULT ''                  │
+ │  jd_text           TEXT             NOT NULL                              │
+ │  jd_hash           TEXT             NOT NULL  UNIQUE        B-Tree UNIQUE │
+ │  pass_threshold    REAL             NOT NULL  DEFAULT 70                  │
+ │  review_threshold  REAL             NOT NULL  DEFAULT 50                  │
+ │  created_at        TEXT             NOT NULL                              │
+ │  updated_at        TEXT             NOT NULL  DEFAULT ''                  │
+ │  total_scans       INTEGER          DEFAULT 0                             │
+ └───────────────────────────────────────────────────────────────────────────┘
+```
+
+#### DDL đầy đủ (ngôn ngữ SQL — SQLite dialect)
+
+```sql
+-- Tao bang chinh luu lich su JD
+CREATE TABLE IF NOT EXISTS job_descriptions (
+    id               INTEGER  PRIMARY KEY AUTOINCREMENT,
+    title            TEXT     NOT NULL    DEFAULT '',
+    jd_text          TEXT     NOT NULL,
+    jd_hash          TEXT     NOT NULL    UNIQUE,   -- MD5(prepared_jd_text)
+    pass_threshold   REAL     NOT NULL    DEFAULT 70,
+    review_threshold REAL     NOT NULL    DEFAULT 50,
+    created_at       TEXT     NOT NULL,             -- ISO 8601: "2026-05-03T10:30:00"
+    updated_at       TEXT     NOT NULL    DEFAULT '',
+    total_scans      INTEGER              DEFAULT 0
+);
+
+-- Chi muc tu dong tao boi UNIQUE constraint
+-- CREATE UNIQUE INDEX sqlite_autoindex_job_descriptions_1 ON job_descriptions(jd_hash);
+
+-- Cau hinh runtime (khong luu vao schema)
+PRAGMA journal_mode = WAL;       -- doc / ghi dong thoi khong block nhau
+PRAGMA foreign_keys = ON;        -- bat rang buoc khoa ngoai
+```
+
+#### Migration tự động (auto-migration trong `init_db()`)
+
+```python
+# database.py — dam bao DB cu van hoat dong sau khi nang cap schema
+existing_cols = {
+    row[1]
+    for row in conn.execute("PRAGMA table_info(job_descriptions)").fetchall()
+}
+pending = [
+    ("pass_threshold",   "REAL NOT NULL DEFAULT 70"),
+    ("review_threshold", "REAL NOT NULL DEFAULT 50"),
+    ("title",            "TEXT NOT NULL DEFAULT ''"),
+    ("updated_at",       "TEXT NOT NULL DEFAULT ''"),
+]
+for col, definition in pending:
+    if col not in existing_cols:
+        conn.execute(f"ALTER TABLE job_descriptions ADD COLUMN {col} {definition}")
+```
+
+---
+
+#### Sơ đồ vật lý — Bảng dự kiến mở rộng
+
+```
+ FILE: ats_data.db
+ ┌───────────────────────────────────────────────┐
+ │  TABLE: job_descriptions  (da trien khai)     │
+ │  id  PK  |  title  |  jd_text  |  jd_hash ... │
+ └────────────────────┬──────────────────────────┘
+                      │ jd_id  FK (1 : N)
+                      ▼
+ ┌───────────────────────────────────────────────┐
+ │  TABLE: scan_sessions  (du kien)              │
+ │  id  PK  |  jd_id  FK  |  source  |  ...     │
+ └────────────────────┬──────────────────────────┘
+                      │ session_id  FK (1 : N)
+                      ▼
+ ┌───────────────────────────────────────────────┐
+ │  TABLE: candidates  (du kien)                 │
+ │  id  PK  |  session_id  FK  |  email  |  ...  │
+ └────────────────────┬──────────────────────────┘
+                      │ candidate_id  FK (1 : N)
+                      ▼
+ ┌───────────────────────────────────────────────┐
+ │  TABLE: email_log  (du kien)                  │
+ │  id  PK  |  candidate_id  FK  |  sent_at  ... │
+ └───────────────────────────────────────────────┘
+```
+
+#### DDL dự kiến — bảng mở rộng
+
+```sql
+-- Phien quet CV
+CREATE TABLE IF NOT EXISTS scan_sessions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    jd_id      INTEGER NOT NULL REFERENCES job_descriptions(id) ON DELETE CASCADE,
+    source     TEXT    NOT NULL DEFAULT 'Local',   -- 'Local' | 'Gmail'
+    created_at TEXT    NOT NULL,
+    total_cvs  INTEGER DEFAULT 0
+);
+
+-- Ket qua tung ung vien
+CREATE TABLE IF NOT EXISTS candidates (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id          INTEGER NOT NULL REFERENCES scan_sessions(id) ON DELETE CASCADE,
+    scanned_at          TEXT    NOT NULL,
+    filename            TEXT,
+    candidate_name      TEXT,
+    candidate_email     TEXT,
+    score               REAL    NOT NULL DEFAULT 0,
+    final_decision      TEXT    NOT NULL DEFAULT 'FAIL',  -- PASS | PENDING | FAIL
+    industry            TEXT,
+    match_reason        TEXT,
+    strengths           TEXT,    -- JSON array serialised as TEXT
+    weaknesses          TEXT,    -- JSON array serialised as TEXT
+    matched_skills      TEXT,    -- JSON array
+    missing_skills      TEXT     -- JSON array
+);
+
+-- Lich su gui email moi phong van
+CREATE TABLE IF NOT EXISTS email_log (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    candidate_id    INTEGER NOT NULL REFERENCES candidates(id) ON DELETE CASCADE,
+    sent_at         TEXT    NOT NULL,
+    to_email        TEXT    NOT NULL,
+    status          TEXT    NOT NULL DEFAULT 'sent'   -- 'sent' | 'failed'
+);
+```
+
+---
+
+#### So sánh mức quan niệm ↔ vật lý
+
+| Khái niệm quan niệm | Ánh xạ vật lý | Ghi chú |
+|---|---|---|
+| JD (Mô tả công việc) | Bảng `job_descriptions` | Đã triển khai |
+| Định danh duy nhất JD | Cột `jd_hash TEXT UNIQUE` | MD5 32 ký tự |
+| Thuộc tính ngưỡng | `pass_threshold`, `review_threshold` REAL | Lưu theo từng JD |
+| Phiên quét CV | Bảng `scan_sessions` | Dự kiến |
+| Ứng viên | Bảng `candidates` | Dự kiến |
+| Lịch sử email | Bảng `email_log` | Dự kiến |
+| Quan hệ JD → Phiên | Khoá ngoại `scan_sessions.jd_id` | Dự kiến |
+| Quan hệ Phiên → Ứng viên | Khoá ngoại `candidates.session_id` | Dự kiến |
+| Thời gian | Kiểu `TEXT` ISO 8601 | SQLite không có DATETIME native |
+| Danh sách kỹ năng | `TEXT` chứa JSON serialised | SQLite không có array type |
+
+---
+
+### 13.3 Giải thích chi tiết các biến trong sơ đồ quan hệ mức vật lý
+
+---
+
+#### Bảng 1: `job_descriptions` — Mô tả công việc (Đã triển khai)
+
+| Biến | Kiểu vật lý | Giải thích |
+|---|---|---|
+| `id` | `INTEGER` | Khoá chính, tự động tăng. Mỗi JD được lưu sẽ nhận một số nguyên duy nhất, bắt đầu từ 1. SQLite sẽ tự quản lý giá trị này, HR không cần nhập. |
+| `title` | `TEXT` | Tên vị trí tuyển dụng do HR nhập vào ô "Tên vị trí" trên giao diện (ví dụ: "Backend Python Developer"). Giá trị mặc định là chuỗi rỗng nếu HR không nhập tên. |
+| `jd_text` | `TEXT` | Toàn bộ nội dung mô tả công việc mà HR dán vào textarea. Đây là trường quan trọng nhất — hệ thống AI sẽ đọc trường này để tạo vector embedding và đối chiếu với CV. |
+| `jd_hash` | `TEXT UNIQUE` | Mã định danh 32 ký tự hex, tạo bằng thuật toán MD5 từ nội dung `jd_text` sau khi chuẩn hoá. Mục đích: ngăn lưu trùng — nếu HR lưu cùng một JD hai lần, hệ thống sẽ cập nhật bản cũ thay vì tạo bản mới. Ràng buộc `UNIQUE` đảm bảo không có hai hàng cùng hash. |
+| `pass_threshold` | `REAL` | Ngưỡng điểm để xếp loại "ĐẠT". Mặc định 70 (tức 70%). Ứng viên có điểm >= giá trị này được đánh dấu PASS và có thể nhận email mời phỏng vấn. |
+| `review_threshold` | `REAL` | Ngưỡng điểm để xếp loại "CHỜ XEM XÉT". Mặc định 50 (50%). Ứng viên có điểm nằm trong khoảng [review_threshold, pass_threshold) sẽ ở trạng thái PENDING. |
+| `created_at` | `TEXT` | Thời điểm bản ghi được tạo lần đầu, lưu dưới dạng chuỗi ISO 8601 (ví dụ: "2026-05-03T10:30:00"). SQLite không có kiểu DATETIME native nên dùng TEXT để lưu. |
+| `updated_at` | `TEXT` | Thời điểm bản ghi được cập nhật lần cuối. Tự động cập nhật mỗi khi HR đổi tên JD hoặc thay đổi ngưỡng điểm. |
+| `total_scans` | `INTEGER` | Bộ đếm số lần JD này đã được dùng để quét CV. Giá trị mặc định là 0, tăng thêm 1 mỗi khi có phiên quét mới sử dụng JD này. |
+
+---
+
+#### Bảng 2: `scan_sessions` — Phiên quét CV (Dự kiến mở rộng)
+
+| Biến | Kiểu vật lý | Giải thích |
+|---|---|---|
+| `id` | `INTEGER` | Khoá chính tự tăng. Mỗi lần HR bấm nút "Quét" sẽ tạo ra một phiên với id riêng. |
+| `jd_id` | `INTEGER FK` | Khoá ngoại trỏ tới `job_descriptions.id`. Biến này liên kết phiên quét với JD mà HR đang dùng, cho phép sau này lọc kết quả "đã quét với JD nào". Nếu JD bị xoá (`ON DELETE CASCADE`), tất cả phiên quét liên quan cũng tự xoá theo. |
+| `source` | `TEXT` | Nguồn CV trong phiên quét — chỉ nhận hai giá trị: `'Local'` (HR tải file từ máy tính) hoặc `'Gmail'` (hệ thống lấy PDF đính kèm từ hộp thư). |
+| `created_at` | `TEXT` | Thời điểm bắt đầu phiên quét, định dạng ISO 8601. |
+| `total_cvs` | `INTEGER` | Số lượng CV đã xử lý trong phiên này. Cho phép HR biết quy mô từng đợt tuyển dụng. |
+
+---
+
+#### Bảng 3: `candidates` — Kết quả từng ứng viên (Dự kiến mở rộng)
+
+| Biến | Kiểu vật lý | Giải thích |
+|---|---|---|
+| `id` | `INTEGER` | Khoá chính tự tăng. Mỗi CV được xử lý cho ra một bản ghi ứng viên riêng. |
+| `session_id` | `INTEGER FK` | Khoá ngoại trỏ tới `scan_sessions.id`. Gom nhóm ứng viên theo đợt quét. `ON DELETE CASCADE`: khi xoá phiên quét, toàn bộ kết quả ứng viên của phiên đó cũng xoá. |
+| `scanned_at` | `TEXT` | Thời điểm CV này được AI phân tích xong, lưu ISO 8601. |
+| `filename` | `TEXT` | Tên file PDF gốc (ví dụ: "Nguyen_Van_A_CV.pdf"). Dùng để HR nhận diện hồ sơ. |
+| `candidate_name` | `TEXT` | Tên ứng viên được hệ thống tự động bóc tách từ nội dung PDF, thường lấy từ các dòng đầu của CV. |
+| `candidate_email` | `TEXT` | Địa chỉ email bóc tách từ CV bằng regex. Đây là trường quan trọng để gửi email mời phỏng vấn. |
+| `score` | `REAL` | Điểm phù hợp tổng hợp (0.0 đến 100.0), tính theo công thức Hybrid: Cosine Similarity × 0.6 + Keyword Match × 0.4. Nếu Kill Switch kích hoạt (không khớp kỹ năng bắt buộc nào), giá trị bằng 0.0. |
+| `final_decision` | `TEXT` | Quyết định phân loại cuối cùng. Chỉ nhận một trong ba giá trị: `'PASS'` (đạt), `'PENDING'` (chờ xem xét), `'FAIL'` (không đạt). Xác định dựa trên `score` so với `pass_threshold` và `review_threshold` của JD tương ứng. |
+| `industry` | `TEXT` | Lĩnh vực ngành nghề được suy luận từ kỹ năng trong CV (ví dụ: "Backend / API", "AI / Machine Learning", "Frontend / Web"). |
+| `match_reason` | `TEXT` | Câu giải thích ngắn bằng tiếng Việt lý do tại sao ứng viên đạt điểm đó (ví dụ: "Điểm phù hợp đạt 82% dựa trên so khớp ngữ nghĩa và kỹ năng"). |
+| `strengths` | `TEXT` | Danh sách điểm mạnh của ứng viên, lưu dưới dạng JSON serialised (ví dụ: `["Có Python và FastAPI", "Điểm ngữ nghĩa cao"]`). SQLite không hỗ trợ kiểu mảng native nên dùng TEXT. |
+| `weaknesses` | `TEXT` | Danh sách điểm yếu/hạn chế, cũng lưu dạng JSON serialised (ví dụ: `["Thiếu Docker", "Chưa có kinh nghiệm Kubernetes"]`). |
+| `matched_skills` | `TEXT` | Danh sách kỹ năng mà ứng viên có VÀ JD yêu cầu, lưu JSON. Là giao (intersection) giữa tập kỹ năng CV và tập kỹ năng JD. |
+| `missing_skills` | `TEXT` | Danh sách kỹ năng bắt buộc trong JD mà CV chưa đề cập, lưu JSON. Là phần JD trừ đi phần khớp. |
+
+---
+
+#### Bảng 4: `email_log` — Lịch sử gửi email mời phỏng vấn (Dự kiến mở rộng)
+
+| Biến | Kiểu vật lý | Giải thích |
+|---|---|---|
+| `id` | `INTEGER` | Khoá chính tự tăng. Mỗi lần gửi email tạo ra một bản ghi riêng. |
+| `candidate_id` | `INTEGER FK` | Khoá ngoại trỏ tới `candidates.id`. Liên kết email với ứng viên cụ thể. `ON DELETE CASCADE`: khi xoá ứng viên, lịch sử email của người đó cũng xoá theo. |
+| `sent_at` | `TEXT` | Thời điểm email được gửi đi thành công, định dạng ISO 8601. |
+| `to_email` | `TEXT` | Địa chỉ email đích (địa chỉ của ứng viên). Lưu riêng để có thể kiểm tra dù bản ghi ứng viên bị sửa. |
+| `status` | `TEXT` | Trạng thái gửi email. Nhận một trong hai giá trị: `'sent'` (gửi thành công qua Gmail API) hoặc `'failed'` (gửi thất bại — lỗi kết nối, OAuth hết hạn, v.v.). Giá trị mặc định là `'sent'`. |
+
+---
+
+#### Tổng hợp các quan hệ khoá ngoại (Foreign Key)
+
+| Khoá ngoại | Từ bảng | Trỏ tới | Hành vi khi xoá cha |
+|---|---|---|---|
+| `scan_sessions.jd_id` | `scan_sessions` | `job_descriptions.id` | CASCADE — xoá JD → xoá phiên quét |
+| `candidates.session_id` | `candidates` | `scan_sessions.id` | CASCADE — xoá phiên → xoá ứng viên |
+| `email_log.candidate_id` | `email_log` | `candidates.id` | CASCADE — xoá ứng viên → xoá log email |

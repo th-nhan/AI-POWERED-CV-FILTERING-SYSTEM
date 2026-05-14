@@ -6,6 +6,7 @@ import {
   Briefcase, Search, AlertCircle, Save, History, ChevronDown, ChevronUp, RefreshCw
 } from 'lucide-react';
 import axios from 'axios';
+import Workflow from './components/Workflow/Workflow';
 
 /* =========================================
    1. MODAL CHI TIẾT KẾT QUẢ (DRAWER)
@@ -297,8 +298,25 @@ export default function App() {
 
   // -- FILE HANDLING (LOCAL) --
   const handleFileSelect = (e) => {
-    const selectedFiles = Array.from(e.target.files);
-    const newFiles = selectedFiles.map(f => ({
+    e.preventDefault();
+    const selectedFiles = Array.from(e.target.files || e.dataTransfer.files || []);
+    
+    const validFiles = [];
+    const invalidFiles = [];
+    
+    selectedFiles.forEach(f => {
+      if (f.name.toLowerCase().endsWith('.pdf')) {
+        validFiles.push(f);
+      } else {
+        invalidFiles.push(f.name);
+      }
+    });
+    
+    if (invalidFiles.length > 0) {
+      alert(`Lỗi: Chỉ hỗ trợ định dạng .pdf!\nCác file sau không hợp lệ đã bị loại bỏ:\n- ${invalidFiles.join('\n- ')}`);
+    }
+    
+    const newFiles = validFiles.map(f => ({
       file: f,
       id: Math.random().toString(36).substring(7),
       status: 'idle',
@@ -321,6 +339,12 @@ export default function App() {
     const filesToScan = files.filter(f => f.status === 'idle' || f.status === 'error');
     if (filesToScan.length === 0) return;
 
+    // Automatically switch to workflow tab and trigger it with the real CV count
+    setActiveTab('workflow');
+    setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('triggerWorkflow', { detail: { count: filesToScan.length } }));
+    }, 100);
+
     for (let fObj of filesToScan) {
       // Update status to scanning
       setFiles(prev => prev.map(f => f.id === fObj.id ? { ...f, status: 'scanning' } : f));
@@ -339,7 +363,7 @@ export default function App() {
         const data = await response.json();
 
         if (response.ok && data.status === 'success') {
-          const resultData = { ...data.data, source: 'Local', filename: fObj.file.name };
+          const resultData = { ...data.data, source: 'Local', filename: fObj.file.name, fileObj: fObj.file };
           setFiles(prev => prev.map(f => f.id === fObj.id ? { ...f, status: 'done', result: resultData } : f));
           setResults(prev => [...prev, resultData]);
         } else {
@@ -359,6 +383,10 @@ export default function App() {
       return;
     }
     setGmailScanning(true);
+
+    // Switch to workflow tab first; trigger after we know the count
+    setActiveTab('workflow');
+
     try {
       const formData = new FormData();
       formData.append('jd_text', jdText);
@@ -378,6 +406,8 @@ export default function App() {
           alert("Không tìm thấy email nào khớp với truy vấn hoặc có đính kèm PDF.");
         } else {
           setResults(prev => [...prev, ...data.data]);
+          // Trigger workflow with the actual number of CVs returned
+          window.dispatchEvent(new CustomEvent('triggerWorkflow', { detail: { count: data.data.length } }));
           alert(`Đã tải và quét thành công ${data.data.length} CV từ Gmail!`);
         }
       } else {
@@ -484,11 +514,15 @@ export default function App() {
             <div className="space-y-2">
               {/* Scan button */}
               <button
-                onClick={activeTab === 'local' ? scanLocalFiles : handleFetchFromGmail}
+                onClick={() => {
+                  if (activeTab === 'local') scanLocalFiles();
+                  else if (activeTab === 'gmail') handleFetchFromGmail();
+                  else if (activeTab === 'workflow') window.dispatchEvent(new CustomEvent('triggerWorkflow'));
+                }}
                 className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-sm shadow-indigo-200 transition-all active:scale-[0.98] flex items-center justify-center gap-2"
               >
                 <BrainCircuit className="w-5 h-5" />
-                {activeTab === 'local' ? 'Bắt đầu quét CV' : 'Quét Hộp thư Gmail'}
+                {activeTab === 'local' ? 'Bắt đầu quét CV' : activeTab === 'gmail' ? 'Quét Hộp thư Gmail' : 'Quét CV đã load'}
               </button>
 
               {/* Save JD button */}
@@ -556,7 +590,7 @@ export default function App() {
           <div className="max-w-6xl mx-auto space-y-8">
 
             {/* TABS NGUỒN DỮ LIỆU */}
-            <div className="bg-white p-2 rounded-2xl border border-slate-200 shadow-sm inline-flex">
+            <div className="bg-white p-2 rounded-2xl border border-slate-200 shadow-sm inline-flex flex-wrap gap-2">
               <button
                 onClick={() => setActiveTab('local')}
                 className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'local' ? 'bg-indigo-50 text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'}`}
@@ -569,6 +603,12 @@ export default function App() {
               >
                 <Mail className="w-4 h-4" /> Quét từ Gmail
               </button>
+              <button
+                onClick={() => setActiveTab('workflow')}
+                className={`px-6 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'workflow' ? 'bg-purple-50 text-purple-700 shadow-sm' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'}`}
+              >
+                <BrainCircuit className="w-4 h-4" /> Mô phỏng Workflow
+              </button>
             </div>
 
             {/* TAB CONTENT */}
@@ -578,6 +618,8 @@ export default function App() {
                 <div
                   className="border-2 border-dashed border-indigo-200 bg-indigo-50/30 rounded-3xl p-10 flex flex-col items-center justify-center text-center hover:bg-indigo-50/50 transition-colors cursor-pointer group"
                   onClick={() => fileInputRef.current?.click()}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={handleFileSelect}
                 >
                   <input
                     type="file"
@@ -685,6 +727,99 @@ export default function App() {
                     <p className="text-xs text-slate-500 mt-2">Hệ thống sẽ chỉ quét các email Chưa đọc (Unread) có chứa file đính kèm PDF.</p>
                   </div>
                 </div>
+              </section>
+            )}
+
+            {/* WORKFLOW SIMULATION — always mounted to preserve state */}
+            <section className={`space-y-6 ${activeTab === 'workflow' ? '' : 'hidden'}`}>
+              <Workflow />
+            </section>
+
+            {/* TỔNG HỢP KẾT QUẢ */}
+            {results.length > 0 && (
+              <section className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm mb-8 animate-in fade-in duration-500">
+                <h3 className="font-bold text-slate-800 text-lg mb-4 flex items-center gap-2">
+                  <BrainCircuit className="w-5 h-5 text-indigo-600" />
+                  Tổng hợp Kết quả Tuyển dụng
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                  {/* Passed */}
+                  <div className="bg-emerald-50 rounded-2xl p-4 border border-emerald-100 flex items-center gap-4">
+                    <div className="p-3 bg-emerald-100 text-emerald-600 rounded-xl"><CheckCircle2 className="w-6 h-6" /></div>
+                    <div>
+                      <p className="text-sm font-bold text-emerald-600 uppercase tracking-wider">Đạt (Pass)</p>
+                      <p className="text-2xl font-black text-emerald-700">{results.filter(r => (r.tong_quan?.quyet_dinh || r.final_decision) === 'ĐẠT' || (r.tong_quan?.quyet_dinh || r.final_decision) === 'PASS').length}</p>
+                    </div>
+                  </div>
+                  {/* Waiting */}
+                  <div className="bg-amber-50 rounded-2xl p-4 border border-amber-100 flex items-center gap-4">
+                    <div className="p-3 bg-amber-100 text-amber-600 rounded-xl"><Loader2 className="w-6 h-6" /></div>
+                    <div>
+                      <p className="text-sm font-bold text-amber-600 uppercase tracking-wider">Chờ Xem Xét</p>
+                      <p className="text-2xl font-black text-amber-700">{results.filter(r => (r.tong_quan?.quyet_dinh || r.final_decision) === 'CHỜ XEM XÉT' || (r.tong_quan?.quyet_dinh || r.final_decision) === 'PENDING').length}</p>
+                    </div>
+                  </div>
+                  {/* Rejected */}
+                  <div className="bg-rose-50 rounded-2xl p-4 border border-rose-100 flex items-center gap-4">
+                    <div className="p-3 bg-rose-100 text-rose-600 rounded-xl"><XCircle className="w-6 h-6" /></div>
+                    <div>
+                      <p className="text-sm font-bold text-rose-600 uppercase tracking-wider">Không Đạt (Fail)</p>
+                      <p className="text-2xl font-black text-rose-700">{results.filter(r => (r.tong_quan?.quyet_dinh || r.final_decision) === 'KHÔNG ĐẠT' || (r.tong_quan?.quyet_dinh || r.final_decision) === 'FAIL').length}</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* List of Passed and Waitlist Candidates */}
+                {(() => {
+                  const positiveCandidates = results.filter(r => 
+                    (r.tong_quan?.quyet_dinh || r.final_decision) === 'ĐẠT' || 
+                    (r.tong_quan?.quyet_dinh || r.final_decision) === 'PASS' ||
+                    (r.tong_quan?.quyet_dinh || r.final_decision) === 'CHỜ XEM XÉT' ||
+                    (r.tong_quan?.quyet_dinh || r.final_decision) === 'PENDING'
+                  );
+                  if (positiveCandidates.length > 0) {
+                    return (
+                      <div className="bg-slate-50 rounded-2xl border border-slate-200 p-5">
+                        <h4 className="text-sm font-bold text-slate-800 mb-3 flex items-center gap-2">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                          Danh sách Ứng viên Đạt & Chờ xem xét
+                        </h4>
+                        <ul className="divide-y divide-slate-200">
+                          {positiveCandidates.map((p, idx) => {
+                            const isPass = (p.tong_quan?.quyet_dinh || p.final_decision) === 'ĐẠT' || (p.tong_quan?.quyet_dinh || p.final_decision) === 'PASS';
+                            return (
+                              <li key={idx} className="py-3 flex flex-col md:flex-row md:items-center justify-between gap-3 hover:bg-slate-100/50 px-3 rounded-lg transition-colors">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  {isPass ? <CheckCircle2 className="w-4 h-4 text-emerald-500" /> : <Loader2 className="w-4 h-4 text-amber-500" />}
+                                  <span className="font-semibold text-slate-800">{p.candidate_name || p.filename || 'Không xác định'}</span>
+                                  {p.fileObj && (
+                                    <button 
+                                      onClick={() => window.open(URL.createObjectURL(p.fileObj))}
+                                      className="ml-2 text-xs font-bold text-indigo-600 hover:text-indigo-800 hover:underline flex items-center gap-1 px-2 py-1 bg-indigo-50/50 rounded-md transition-colors"
+                                    >
+                                      <FileIcon className="w-3.5 h-3.5" /> Mở PDF CV
+                                    </button>
+                                  )}
+                                </div>
+                                <div className="flex flex-wrap items-center gap-3 text-sm text-slate-600">
+                                  <span className="flex items-center gap-1.5"><Mail className="w-4 h-4 text-slate-400" /> {extractEmail(p.candidate_email) || 'Không có email'}</span>
+                                  <span className="flex items-center gap-1.5 bg-slate-200/70 px-2.5 py-1 rounded-md font-medium text-slate-700"><Briefcase className="w-3.5 h-3.5 text-slate-400" /> {p.tong_quan?.nganh_nghe || p.industry || '—'}</span>
+                                  <button
+                                    onClick={() => handleSendEmail(p)}
+                                    className="ml-2 inline-flex items-center gap-1.5 text-xs font-bold bg-indigo-50 text-indigo-600 hover:bg-indigo-100 px-3 py-1.5 rounded-lg transition-colors border border-indigo-100 shadow-sm"
+                                  >
+                                    <Mail className="w-3.5 h-3.5" /> Gửi Mail
+                                  </button>
+                                </div>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
               </section>
             )}
 

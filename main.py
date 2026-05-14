@@ -69,9 +69,6 @@ TECH_SKILL_ALIASES = [
     ("Flutter", ["flutter"]),
     ("HTML", ["html", "html5"]),
     ("CSS", ["css", "css3"]),
-    ("Frontend", ["frontend", "front-end", "front end"]),
-    ("Backend", ["backend", "back-end", "back end"]),
-    ("Fullstack", ["fullstack", "full-stack", "full stack"]),
     ("React", ["react", "reactjs", "react.js"]),
     ("Next.js", ["nextjs", "next.js"]),
     ("Vue", ["vue", "vuejs", "vue.js"]),
@@ -84,8 +81,6 @@ TECH_SKILL_ALIASES = [
     (".NET", [".net", "asp.net"]),
     ("PHP", ["php"]),
     ("Laravel", ["laravel"]),
-    ("Machine Learning", ["machine learning", "ml"]),
-    ("Deep Learning", ["deep learning", "dl"]),
     ("NLP", ["nlp", "natural language processing"]),
     ("Computer Vision", ["computer vision", "opencv"]),
     ("TensorFlow", ["tensorflow"]),
@@ -93,7 +88,6 @@ TECH_SKILL_ALIASES = [
     ("Pandas", ["pandas"]),
     ("NumPy", ["numpy"]),
     ("Scikit-learn", ["scikit-learn", "sklearn"]),
-    ("Data Analysis", ["data analysis", "data analyst", "phân tích dữ liệu"]),
     ("Power BI", ["power bi", "powerbi"]),
     ("Excel", ["excel"]),
     ("CI/CD", ["ci/cd", "cicd", "github actions", "jenkins"]),
@@ -255,10 +249,9 @@ def take_items(items: Sequence[str], limit: int = 6) -> list[str]:
 
 def extract_role_from_text(text: str) -> Optional[str]:
     role_keywords = [
-        "developer", "engineer", "designer", "manager", "analyst", "scientist",
+        "developer", "engineer", "designer", "analyst", "scientist",
         "administrator", "consultant", "specialist", "kỹ sư", "lập trình",
-        "chuyên viên", "quản lý", "thực tập sinh", "intern", "fresher",
-        "junior", "senior", "lead", "architect", "tester", "qa", "qc",
+        "chuyên viên", "quản lý", "tester", "qa", "qc",
         "data", "frontend", "backend", "fullstack", "devops", "marketing",
         "sales", "nhân sự", "hr", "accountant", "kế toán", "business analyst",
         "giám đốc", "trưởng phòng", "phó phòng", "trưởng nhóm"
@@ -279,7 +272,17 @@ def extract_role_from_text(text: str) -> Optional[str]:
             if len(clean_line.split()) <= 8:
                 if any(bad in lower_line for bad in ["experience", "kinh nghiệm", "kỹ năng", "skill", "education", "học vấn", "certificate", "chứng chỉ", "objective", "mục tiêu"]):
                     continue
-                return clean_line.title()
+                
+                result_role = clean_line
+                levels_to_remove = [
+                    "intern", "fresher", "junior", "senior", "lead", 
+                    "mid-level", "mid level", "middle", "mid", "thực tập sinh", "thực tập"
+                ]
+                for lvl in levels_to_remove:
+                    result_role = re.sub(rf"(?i)\b{lvl}\b", "", result_role)
+                
+                result_role = re.sub(r"\s+", " ", result_role).strip(" -_,|")
+                return result_role.title() if result_role else clean_line.title()
                 
     return None
 
@@ -295,26 +298,120 @@ def build_embedding_input(text: str) -> str:
     return clean_text[:MAX_EMBEDDING_CHARS]
 
 
+def extract_skill_requirements(text: str) -> list[list[str]]:
+    groups = []
+    or_keywords = ["1 trong", "biết 1", "hoặc", " or ", "one of", "1 stack", "ít nhất 1", "at least 1", "1 language"]
+    
+    is_or_context = False
+    
+    for line in text.splitlines():
+        lower_line = line.lower()
+        if any(kw in lower_line for kw in or_keywords):
+            is_or_context = True
+            
+        skills_in_line = extract_skills(line)
+        if not skills_in_line:
+            continue
+            
+        if is_or_context and len(skills_in_line) > 1:
+            groups.append(skills_in_line) # OR group
+            is_or_context = False # Reset after using
+        else:
+            for s in skills_in_line:
+                groups.append([s]) # AND group
+            is_or_context = False # Reset if used
+                
+    unique_groups = []
+    for g in groups:
+        if g not in unique_groups:
+            unique_groups.append(g)
+    return unique_groups
+
+
+def evaluate_skills(skill_groups: list[list[str]], cv_skills: list[str]) -> tuple[list[str], list[str]]:
+    matched = []
+    missing = []
+    
+    for group in skill_groups:
+        group_matched = [s for s in group if s in cv_skills]
+        if group_matched:
+            for s in group_matched:
+                if s not in matched:
+                    matched.append(s)
+        else:
+            repr_group = " hoặc ".join(group)
+            if repr_group not in missing:
+                missing.append(repr_group)
+                
+    return matched, missing
+
+
+def extract_mandatory_and_nice_skills(jd_text: str) -> tuple[list[list[str]], list[list[str]]]:
+    lines = [line.strip() for line in (jd_text or "").splitlines() if line.strip()]
+    mandatory_text = []
+    nice_to_have_text = []
+    
+    is_nice = False
+    nice_keywords = ["nice to have", "nice-to-have", "plus", "điểm cộng", "ưu tiên", "không bắt buộc", "optional", "bonus", "lợi thế"]
+    
+    for line in lines:
+        lower_line = line.lower()
+        if any(kw in lower_line for kw in nice_keywords) and len(line) < 60:
+            is_nice = True
+            
+        if is_nice:
+            nice_to_have_text.append(line)
+        else:
+            mandatory_text.append(line)
+            
+    mandatory_groups = extract_skill_requirements("\n".join(mandatory_text))
+    nice_groups = extract_skill_requirements("\n".join(nice_to_have_text))
+    
+    flat_mandatory = {s for g in mandatory_groups for s in g}
+    filtered_nice_groups = []
+    for g in nice_groups:
+        filtered_g = [s for s in g if s not in flat_mandatory]
+        if filtered_g:
+            filtered_nice_groups.append(filtered_g)
+    
+    return mandatory_groups, filtered_nice_groups
+
+
 def build_vietnamese_analysis(
     jd_text: str,
     cv_text: str,
     match_score: float,
 ) -> dict:
-    jd_skills = extract_skills(jd_text)
+    mandatory_groups, nice_groups = extract_mandatory_and_nice_skills(jd_text)
     cv_skills = extract_skills(cv_text)
-    matched_skills = [skill for skill in jd_skills if skill in cv_skills]
-    missing_skills = [skill for skill in jd_skills if skill not in cv_skills]
-    extra_skills = [skill for skill in cv_skills if skill not in matched_skills]
+    
+    matched_mandatory, missing_mandatory = evaluate_skills(mandatory_groups, cv_skills)
+    matched_nice, missing_nice = evaluate_skills(nice_groups, cv_skills)
+    
+    flat_mandatory = [s for g in mandatory_groups for s in g]
+    flat_nice = [s for g in nice_groups for s in g]
+    jd_skills = flat_mandatory + flat_nice
+    matched_skills = matched_mandatory + matched_nice
+    
+    extra_skills = [s for s in cv_skills if s not in jd_skills]
+    
     jd_domain = extract_role_from_text(jd_text) or infer_domain(jd_skills, jd_text)
     cv_domain = extract_role_from_text(cv_text) or infer_domain(cv_skills, cv_text)
 
     strengths = []
     weaknesses = []
 
-    if matched_skills:
+    if matched_mandatory:
         strengths.append(
-            "Ứng viên đáp ứng các kỹ năng quan trọng trong JD: "
-            + ", ".join(take_items(matched_skills))
+            "Ứng viên đáp ứng các kỹ năng BẮT BUỘC: "
+            + ", ".join(take_items(matched_mandatory))
+            + "."
+        )
+        
+    if matched_nice:
+        strengths.append(
+            "Điểm cộng (Nice-to-have): Ứng viên có kỹ năng ưu tiên: "
+            + ", ".join(take_items(matched_nice))
             + "."
         )
 
@@ -335,10 +432,10 @@ def build_vietnamese_analysis(
     if not strengths:
         strengths.append("CV có một số tín hiệu liên quan tới JD nhưng chưa nổi bật.")
 
-    if missing_skills:
+    if missing_mandatory:
         weaknesses.append(
-            "Chưa thấy rõ trong CV các yêu cầu: "
-            + ", ".join(take_items(missing_skills))
+            "Chưa thấy rõ trong CV các yêu cầu BẮT BUỘC: "
+            + ", ".join(take_items(missing_mandatory))
             + "."
         )
 
@@ -353,8 +450,13 @@ def build_vietnamese_analysis(
     if not weaknesses:
         weaknesses.append("Chưa phát hiện hạn chế lớn từ phần kỹ năng và nội dung CV.")
 
+    jd_domain_inferred = infer_domain(jd_skills, jd_text)
+    cv_domain_inferred = infer_domain(cv_skills, cv_text)
+
     if jd_domain == cv_domain and jd_domain != "Chưa xác định rõ":
         domain_comment = f"CV và JD cùng nhóm {jd_domain}."
+    elif jd_domain_inferred == cv_domain_inferred and jd_domain_inferred != "Chưa xác định rõ":
+        domain_comment = f"CV và JD cùng thuộc lĩnh vực {jd_domain_inferred}."
     elif jd_domain != "Chưa xác định rõ" and cv_domain != "Chưa xác định rõ":
         domain_comment = f"JD nghiêng về {jd_domain}, trong khi CV nghiêng về {cv_domain}; cần phỏng vấn để xác nhận mức độ phù hợp."
     else:
@@ -363,8 +465,12 @@ def build_vietnamese_analysis(
     return {
         "jd_skills": jd_skills,
         "cv_skills": cv_skills,
+        "mandatory_groups": mandatory_groups,
+        "nice_groups": nice_groups,
+        "matched_mandatory": matched_mandatory,
+        "matched_nice": matched_nice,
         "matched_skills": matched_skills,
-        "missing_skills": missing_skills,
+        "missing_mandatory": missing_mandatory,
         "strengths": strengths,
         "weaknesses": weaknesses,
         "jd_domain": jd_domain,
@@ -565,6 +671,19 @@ def extract_years_of_experience(cv_text: str) -> int:
                     max_years = max(max_years, y)
             except ValueError:
                 pass
+                
+    if max_years == 0:
+        lines = [line.strip().lower() for line in text.splitlines()[:20] if line.strip()]
+        for line in lines:
+            if "senior" in line or "lead" in line or "architect" in line or "trưởng nhóm" in line:
+                return 4
+            elif "mid-level" in line or "mid level" in line or "middle" in line:
+                return 2
+            elif "junior" in line:
+                return 1
+            elif "intern" in line or "fresher" in line or "thực tập" in line:
+                return 0
+                
     return max_years
 
 
@@ -578,8 +697,9 @@ def get_decision(score: float) -> tuple[str, str, bool]:
 
 def build_score_breakdown(
     semantic_score: float,
-    jd_skills: Optional[Sequence[str]] = None,
-    matched_skills: Optional[Sequence[str]] = None,
+    mandatory_groups: Optional[Sequence[list[str]]] = None,
+    matched_mandatory: Optional[Sequence[str]] = None,
+    matched_nice: Optional[Sequence[str]] = None,
     exp_score: float = 0.0,
     skill_kill_switch: bool = False,
     has_core_skill: bool = True,
@@ -594,25 +714,43 @@ def build_score_breakdown(
             "tong_diem": 0,
         }
 
-    jd_skills = jd_skills or []
-    matched_skills = matched_skills or []
+    mandatory_groups = mandatory_groups or []
+    matched_mandatory = matched_mandatory or []
+    matched_nice = matched_nice or []
 
-    if jd_skills:
-        skill_ratio = len(matched_skills) / len(jd_skills)
+    if mandatory_groups:
+        fulfilled_groups = 0.0
+        for g in mandatory_groups:
+            matched_count = sum(1 for s in g if s in matched_mandatory)
+            if len(g) > 1:
+                if matched_count >= 2:
+                    fulfilled_groups += 1.0
+                elif matched_count == 1:
+                    fulfilled_groups += 0.5
+            else:
+                if matched_count > 0:
+                    fulfilled_groups += 1.0
+        skill_ratio = fulfilled_groups / len(mandatory_groups)
     else:
         skill_ratio = semantic_score / 100.0
 
     ky_nang_bat_buoc = int(round(45 * skill_ratio))
-    so_nam_va_cap_do = int(round(30 * (exp_score / 100.0) * skill_ratio))
+    if exp_score >= 100.0:
+        so_nam_va_cap_do = 30
+    else:
+        so_nam_va_cap_do = int(round(30 * (exp_score / 100.0) * skill_ratio))
     
     if has_core_skill:
         chat_luong_kinh_nghiem = int(round(15 * (semantic_score / 100.0) * skill_ratio))
     else:
         chat_luong_kinh_nghiem = 0
         
-    ky_nang_cong_diem = int(round(10 * (semantic_score / 100.0) * skill_ratio))
+    # Bonus for nice-to-have skills
+    ky_nang_cong_diem = int(round(10 * (semantic_score / 100.0) * skill_ratio)) + (len(matched_nice) * 3)
+    if ky_nang_cong_diem > 10:
+        ky_nang_cong_diem = 10
 
-    tong_diem = ky_nang_bat_buoc + so_nam_va_cap_do + chat_luong_kinh_nghiem + ky_nang_cong_diem
+    tong_diem = min(100, ky_nang_bat_buoc + so_nam_va_cap_do + chat_luong_kinh_nghiem + ky_nang_cong_diem)
 
     return {
         "semantic_similarity": int(round(semantic_score)),
@@ -662,18 +800,25 @@ def match_cv_to_jd(
         semantic_score,
     )
 
-    jd_years = extract_years_of_experience(jd_text or global_ats_state.jd_text)
+    actual_jd_text = jd_text or global_ats_state.jd_text
+    jd_years = extract_years_of_experience(actual_jd_text)
     cv_years = extract_years_of_experience(cv_text)
+    
+    # Force 0 years for Intern/Fresher roles or if no experience is required
+    jd_domain_role = extract_role_from_text(actual_jd_text) or ""
+    is_intern_role = any(role in jd_domain_role.lower() for role in ["intern", "thực tập", "fresher"])
+    entry_level_keywords = ["không yêu cầu kinh nghiệm", "mới tốt nghiệp", "sinh viên năm cuối", "chưa có kinh nghiệm"]
+    
+    if is_intern_role or any(kw in actual_jd_text.lower() for kw in entry_level_keywords):
+        jd_years = 0
     
     if jd_years > 0:
         if cv_years >= jd_years:
             exp_score = 100.0
         else:
-            exp_score = (cv_years / jd_years) * 100.0
+            exp_score = 0.0
     else:
         exp_score = 100.0
-
-    actual_jd_text = jd_text or global_ats_state.jd_text
     
     jd_domain_inferred = infer_domain(analysis.get("jd_skills", []), actual_jd_text)
     cv_domain_inferred = infer_domain(analysis.get("cv_skills", []), cv_text)
@@ -684,12 +829,13 @@ def match_cv_to_jd(
     else:
         has_core_skill = bool(analysis["matched_skills"]) if analysis["jd_skills"] else True
 
-    skill_kill_switch = bool(analysis["jd_skills"]) and not analysis["matched_skills"]
+    skill_kill_switch = bool(analysis["mandatory_groups"]) and not analysis["matched_mandatory"]
 
     score_breakdown = build_score_breakdown(
         semantic_score=semantic_score,
-        jd_skills=analysis["jd_skills"],
-        matched_skills=analysis["matched_skills"],
+        mandatory_groups=analysis["mandatory_groups"],
+        matched_mandatory=analysis["matched_mandatory"],
+        matched_nice=analysis["matched_nice"],
         exp_score=exp_score,
         skill_kill_switch=skill_kill_switch,
         has_core_skill=has_core_skill,
@@ -705,6 +851,11 @@ def match_cv_to_jd(
         analysis["weaknesses"].insert(
             0,
             "Không khớp bất kỳ kỹ năng bắt buộc nào trong JD, hệ thống cho rớt tự động.",
+        )
+    if jd_years > 0 and cv_years < jd_years:
+        analysis["weaknesses"].insert(
+            0,
+            f"Chưa đáp ứng đủ yêu cầu kinh nghiệm (JD yêu cầu {jd_years} năm, CV chỉ có {cv_years} năm).",
         )
 
     decision_vi, decision_code, passed = get_decision(match_score)
@@ -753,7 +904,7 @@ def match_cv_to_jd(
         },
         "ky_nang": {
             "ung_vien_co": analysis["matched_skills"] or ["Chưa phát hiện kỹ năng trùng rõ ràng"],
-            "bat_buoc_con_thieu": analysis["missing_skills"] or ["Chưa phát hiện thiếu sót kỹ năng lõi"],
+            "bat_buoc_con_thieu": analysis["missing_mandatory"] or ["Đã đáp ứng đủ kỹ năng bắt buộc"],
         },
         "nhan_xet_tuyen_dung": {
             "diem_manh": analysis["strengths"],
@@ -848,7 +999,7 @@ async def scan_local_cv(jd_text: str = Form(...), file: UploadFile = File(...)):
         cv_text, pdf_error = read_pdf(file_bytes)
 
         if not cv_text:
-            raise HTTPException(status_code=422, detail=f"PDF read error: {pdf_error}")
+            raise HTTPException(status_code=422, detail="Lỗi định dạng: Không thể trích xuất văn bản từ CV này.")
 
         result, error = process_pipeline(cv_text, jd_text, file.filename)
         if not result:
@@ -865,6 +1016,67 @@ async def scan_local_cv(jd_text: str = Form(...), file: UploadFile = File(...)):
     except Exception as exc:
         print(f"API error (local CV): {exc}")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/upload_cvs")
+async def upload_cvs(job_description: str = Form(...), files: list[UploadFile] = File(...)):
+    if not normalize_text(job_description):
+        raise HTTPException(status_code=400, detail="Job description text is empty.")
+
+    cv_data_list = []
+    for file in files:
+        if not file.filename or not file.filename.lower().endswith(".pdf"):
+            cv_data_list.append({
+                "filename": file.filename or "unknown",
+                "text": "",
+                "error": "Only PDF files are supported."
+            })
+            continue
+
+        try:
+            file_bytes = await file.read()
+            cv_text, pdf_error = read_pdf(file_bytes)
+
+            if not cv_text:
+                cv_data_list.append({
+                    "filename": file.filename,
+                    "text": "",
+                    "error": "Lỗi định dạng: Không thể trích xuất văn bản từ CV này."
+                })
+            else:
+                cv_data_list.append({
+                    "filename": file.filename,
+                    "text": cv_text,
+                    "error": None
+                })
+        except Exception as e:
+             cv_data_list.append({
+                "filename": file.filename,
+                "text": "",
+                "error": f"Lỗi đọc file: {e}"
+            })
+
+    valid_cvs = [cv for cv in cv_data_list if cv["text"]]
+    
+    batch_results = []
+    if valid_cvs:
+        batch_results = batch_processor(valid_cvs, job_description)
+        
+    final_results = []
+    for cv in cv_data_list:
+        if cv["error"]:
+            final_results.append({
+                "filename": cv["filename"],
+                "success": False,
+                "error": cv["error"],
+                "data": None
+            })
+        else:
+            matched = next((res for res in batch_results if res["filename"] == cv["filename"]), None)
+            if matched:
+                final_results.append(matched)
+                
+    return {"status": "success", "results": final_results}
 
 
 @app.post("/api/scan-gmail")
