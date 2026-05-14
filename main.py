@@ -986,6 +986,30 @@ def get_error_status_code(error: Optional[str]) -> int:
     return 500
 
 
+PASSED_CVS_DIR = os.path.join(os.path.dirname(__file__), "passed_cvs")
+os.makedirs(PASSED_CVS_DIR, exist_ok=True)
+
+
+def save_passed_cv_sync(filename: str, file_bytes: bytes):
+    safe_filename = "".join(c for c in filename if c.isalnum() or c in " ._-").strip()
+    if not safe_filename:
+        safe_filename = "passed_cv.pdf"
+    
+    filepath = os.path.join(PASSED_CVS_DIR, safe_filename)
+    
+    base, ext = os.path.splitext(filepath)
+    counter = 1
+    while os.path.exists(filepath):
+        filepath = f"{base}_{counter}{ext}"
+        counter += 1
+        
+    try:
+        with open(filepath, "wb") as f:
+            f.write(file_bytes)
+    except Exception as e:
+        print(f"Failed to save passed CV {filename}: {e}")
+
+
 @app.post("/api/scan-local-cv")
 async def scan_local_cv(jd_text: str = Form(...), file: UploadFile = File(...)):
     if not file.filename or not file.filename.lower().endswith(".pdf"):
@@ -1004,6 +1028,9 @@ async def scan_local_cv(jd_text: str = Form(...), file: UploadFile = File(...)):
         result, error = process_pipeline(cv_text, jd_text, file.filename)
         if not result:
             raise HTTPException(status_code=get_error_status_code(error), detail=error)
+
+        if result.get("passed"):
+            save_passed_cv_sync(file.filename, file_bytes)
 
         return {
             "status": "success",
@@ -1047,6 +1074,7 @@ async def upload_cvs(job_description: str = Form(...), files: list[UploadFile] =
                 cv_data_list.append({
                     "filename": file.filename,
                     "text": cv_text,
+                    "bytes": file_bytes,
                     "error": None
                 })
         except Exception as e:
@@ -1061,6 +1089,11 @@ async def upload_cvs(job_description: str = Form(...), files: list[UploadFile] =
     batch_results = []
     if valid_cvs:
         batch_results = batch_processor(valid_cvs, job_description)
+        for res in batch_results:
+            if res.get("success") and res.get("data", {}).get("passed"):
+                original_cv = next((cv for cv in valid_cvs if cv["filename"] == res["filename"]), None)
+                if original_cv and "bytes" in original_cv:
+                    save_passed_cv_sync(res["filename"], original_cv["bytes"])
         
     final_results = []
     for cv in cv_data_list:
